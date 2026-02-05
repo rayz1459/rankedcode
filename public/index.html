@@ -53,6 +53,7 @@
           </div>
           <div class="card">
             <h3>Create match</h3>
+            <p class="muted card-subtitle">Unranked — no Elo loss or gain.</p>
             <label>
               Difficulty
               <select id="difficulty">
@@ -89,23 +90,73 @@
         </div>
       </section>
 
-      <section id="match" class="hidden">
-        <h2>Match Room</h2>
-        <div class="card">
-          <div id="matchMeta"></div>
-          <div id="matchPlayers" class="stats"></div>
-          <a id="leetcodeLink" target="_blank" rel="noreferrer">Open problem</a>
-          <div class="grid">
-            <label>
-              Your runtime (ms)
-              <input type="number" id="runtimeInput" min="1" placeholder="e.g. 85" />
-            </label>
-            <button id="submitRuntime">Submit runtime</button>
+      <section id="match" class="hidden match-section">
+        <div class="match-toolbar">
+          <div id="matchMeta" class="match-meta"></div>
+          <div id="matchPlayers" class="match-players"></div>
+          <a id="leetcodeLink" class="leetcode-link" target="_blank" rel="noreferrer">Open on LeetCode</a>
+        </div>
+        <div class="match-panels">
+          <div class="panel problem-panel">
+            <div class="panel-tabs">
+              <button type="button" class="panel-tab active" data-tab="description">Description</button>
+            </div>
+            <div class="panel-content">
+              <div id="problemTitle" class="problem-title"></div>
+              <div id="problemDifficulty" class="problem-difficulty"></div>
+              <div id="problemContent" class="problem-content"></div>
+            </div>
           </div>
-          <div id="matchStatus" class="muted"></div>
+          <div class="panel editor-panel">
+            <div class="editor-header">
+              <span class="editor-label">&lt;/&gt; Code</span>
+              <label class="editor-lang-label">
+                Language
+                <select id="languageSelect">
+                  <option value="javascript">JavaScript</option>
+                  <option value="python">Python</option>
+                  <option value="java">Java</option>
+                  <option value="cpp">C++</option>
+                  <option value="c">C</option>
+                  <option value="csharp">C#</option>
+                  <option value="go">Go</option>
+                </select>
+              </label>
+            </div>
+            <div class="editor-wrap">
+              <textarea id="codeEditor" spellcheck="false" placeholder="// Write your solution here..."></textarea>
+            </div>
+            <div class="editor-actions">
+              <button type="button" id="runCode" class="btn-run">Run</button>
+              <button type="button" id="testCode" class="btn-test">Test</button>
+              <button type="button" id="submitSolution" class="btn-submit">Submit</button>
+            </div>
+            <div class="test-result-wrap">
+              <div class="test-result-tabs">
+                <button type="button" class="test-tab active" data-result-tab="result">Test result</button>
+              </div>
+              <div id="testResult" class="test-result-content"></div>
+            </div>
+            <div class="runtime-submit-wrap">
+              <span id="runtimeDisplay" class="runtime-display muted"></span>
+              <span id="matchStatus" class="muted match-status"></span>
+              <button type="button" id="forfeitBtn" class="btn-forfeit">Forfeit</button>
+            </div>
+          </div>
         </div>
       </section>
     </main>
+
+    <div id="resultModal" class="modal-overlay hidden">
+      <div class="modal-content result-modal">
+        <h2 id="resultModalTitle"></h2>
+        <p id="resultModalElo" class="result-modal-elo muted"></p>
+        <div class="modal-actions">
+          <button type="button" id="resultModalLobby">Return to lobby</button>
+          <button type="button" id="resultModalQueue" class="btn-queue">Queue another game</button>
+        </div>
+      </div>
+    </div>
 
     <footer>
       <p class="muted">Inspired by chess.com style 1v1 matchmaking.</p>

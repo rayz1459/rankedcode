@@ -26,7 +26,8 @@ export async function getDb() {
         problem_title TEXT NOT NULL,
         difficulty TEXT NOT NULL,
         status TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        ranked INTEGER NOT NULL DEFAULT 1
       );
       CREATE TABLE IF NOT EXISTS match_players (
         id TEXT PRIMARY KEY,
@@ -49,6 +50,11 @@ export async function getDb() {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
     `);
+    try {
+      await db.run("ALTER TABLE matches ADD COLUMN ranked INTEGER NOT NULL DEFAULT 1");
+    } catch (_) {
+      /* column may already exist */
+    }
   }
   return dbPromise;
 }
