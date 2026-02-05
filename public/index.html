@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ranked LeetCode</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Ranked LeetCode</h1>
+      <div id="session"></div>
+    </header>
+
+    <main>
+      <section id="auth">
+        <h2>Sign in or create an account</h2>
+        <div class="grid">
+          <form id="registerForm">
+            <h3>Create account</h3>
+            <input type="email" name="email" placeholder="Email" required />
+            <input type="password" name="password" placeholder="Password" required />
+            <button type="submit">Register</button>
+          </form>
+          <form id="loginForm">
+            <h3>Sign in</h3>
+            <input type="email" name="email" placeholder="Email" required />
+            <input type="password" name="password" placeholder="Password" required />
+            <button type="submit">Login</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="lobby" class="hidden">
+        <h2>1v1 Lobby</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Quick play (Ranked)</h3>
+            <label>
+              Difficulty
+              <select id="queueDifficulty">
+                <option value="">Any</option>
+                <option>Easy</option>
+                <option>Medium</option>
+                <option>Hard</option>
+              </select>
+            </label>
+            <div class="grid">
+              <button id="joinQueue">Start queue</button>
+              <button id="leaveQueue" class="ghost">Cancel queue</button>
+            </div>
+            <p id="queueStatus" class="muted">Not in queue.</p>
+          </div>
+          <div class="card">
+            <h3>Create match</h3>
+            <label>
+              Difficulty
+              <select id="difficulty">
+                <option value="">Any</option>
+                <option>Easy</option>
+                <option>Medium</option>
+                <option>Hard</option>
+              </select>
+            </label>
+            <button id="createMatch">Create match</button>
+            <p class="muted">Share the match ID with your opponent.</p>
+          </div>
+          <div class="card">
+            <h3>Join match</h3>
+            <input type="text" id="joinMatchId" placeholder="Match ID" />
+            <button id="joinMatch">Join match</button>
+          </div>
+          <div class="card">
+            <h3>Leaderboard</h3>
+            <ul id="leaderboard"></ul>
+          </div>
+          <div class="card">
+            <h3>Your stats</h3>
+            <div id="statsSummary" class="stats"></div>
+          </div>
+          <div class="card">
+            <h3>Recent matches</h3>
+            <ul id="recentMatches"></ul>
+          </div>
+          <div class="card">
+            <h3>Your match history</h3>
+            <ul id="myMatches"></ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="match" class="hidden">
+        <h2>Match Room</h2>
+        <div class="card">
+          <div id="matchMeta"></div>
+          <div id="matchPlayers" class="stats"></div>
+          <a id="leetcodeLink" target="_blank" rel="noreferrer">Open problem</a>
+          <div class="grid">
+            <label>
+              Your runtime (ms)
+              <input type="number" id="runtimeInput" min="1" placeholder="e.g. 85" />
+            </label>
+            <button id="submitRuntime">Submit runtime</button>
+          </div>
+          <div id="matchStatus" class="muted"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p class="muted">Inspired by chess.com style 1v1 matchmaking.</p>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
