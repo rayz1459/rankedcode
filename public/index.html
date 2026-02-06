@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>hackcomp</title>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css" />
   </head>
   <body>
     <header>
@@ -118,13 +120,11 @@
                   <option value="java">Java</option>
                   <option value="cpp">C++</option>
                   <option value="c">C</option>
-                  <option value="csharp">C#</option>
-                  <option value="go">Go</option>
                 </select>
               </label>
             </div>
             <div class="editor-wrap">
-              <textarea id="codeEditor" spellcheck="false" placeholder="// Write your solution here..."></textarea>
+              <textarea id="codeEditor" spellcheck="false" placeholder="// Write your solution here..." style="display:none;"></textarea>
             </div>
             <div class="editor-actions">
               <button type="button" id="runCode" class="btn-run">Run</button>
@@ -162,6 +162,12 @@
       <p class="muted">Inspired by chess.com style 1v1 matchmaking.</p>
     </footer>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

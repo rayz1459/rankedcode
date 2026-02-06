@@ -11,6 +11,12 @@ import path from "path";
 import os from "os";
 import { getDb } from "./db.js";
 import { computeEloUpdate } from "./elo.js";
+import {
+  getBuiltinProblem,
+  pickBuiltinQuestion,
+  getBuiltinTestCases,
+  BUILTIN_PREFIX
+} from "./builtin-problems.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -102,68 +108,10 @@ app.get("/api/me", authMiddleware, async (req, res) => {
   res.json({ user });
 });
 
-const leetCodeCache = {
-  timestamp: 0,
-  questions: []
-};
-
-async function fetchLeetCodeQuestions() {
-  const now = Date.now();
-  if (leetCodeCache.questions.length > 0 && now - leetCodeCache.timestamp < 1000 * 60 * 10) {
-    return leetCodeCache.questions;
-  }
-  const query = `
-    query problemsetQuestionList($categorySlug: String, $limit: Int, $skip: Int, $filters: QuestionListFilterInput) {
-      problemsetQuestionList: questionList(
-        categorySlug: $categorySlug
-        limit: $limit
-        skip: $skip
-        filters: $filters
-      ) {
-        total: totalNum
-        questions: data {
-          title
-          titleSlug
-          difficulty
-        }
-      }
-    }
-  `;
-  const response = await fetch("https://leetcode.com/graphql", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": "RankedLeetCode/0.1"
-    },
-    body: JSON.stringify({
-      query,
-      variables: {
-        categorySlug: "all-code-essentials",
-        skip: 0,
-        limit: 50,
-        filters: {}
-      }
-    })
-  });
-  if (!response.ok) {
-    throw new Error("Failed to fetch from LeetCode");
-  }
-  const payload = await response.json();
-  const questions = payload?.data?.problemsetQuestionList?.questions || [];
-  leetCodeCache.questions = questions;
-  leetCodeCache.timestamp = now;
-  return questions;
-}
-
-async function pickQuestion({ difficulty }) {
-  const questions = await fetchLeetCodeQuestions();
-  const filtered = difficulty
-    ? questions.filter((q) => q.difficulty.toLowerCase() === String(difficulty).toLowerCase())
-    : questions;
-  if (!filtered.length) {
-    return null;
-  }
-  return filtered[Math.floor(Math.random() * filtered.length)];
+function pickQuestion({ difficulty }) {
+  const builtin = pickBuiltinQuestion(difficulty);
+  if (!builtin) return null;
+  return { titleSlug: builtin.titleSlug, title: builtin.title, difficulty: builtin.difficulty };
 }
 
 async function findActiveMatchForUser(db, userId) {
@@ -176,64 +124,18 @@ async function findActiveMatchForUser(db, userId) {
   );
 }
 
-const problemDetailCache = new Map();
-const PROBLEM_CACHE_TTL_MS = 1000 * 60 * 15;
-
-async function fetchLeetCodeProblemDetail(titleSlug) {
-  const cached = problemDetailCache.get(titleSlug);
-  if (cached && Date.now() - cached.timestamp < PROBLEM_CACHE_TTL_MS) {
-    return cached.data;
-  }
-  const query = `
-    query questionData($titleSlug: String!) {
-      question(titleSlug: $titleSlug) {
-        questionId
-        questionFrontendId
-        title
-        titleSlug
-        content
-        difficulty
-        topicTags { name slug }
-        codeSnippets { lang langSlug code }
-        exampleTestcases
-        metaData
-      }
-    }
-  `;
-  const response = await fetch("https://leetcode.com/graphql", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "User-Agent": "hackcomp/0.1" },
-    body: JSON.stringify({ query, variables: { titleSlug } })
-  });
-  if (!response.ok) throw new Error("Failed to fetch from LeetCode");
-  const payload = await response.json();
-  const question = payload?.data?.question;
-  if (!question) return null;
-  problemDetailCache.set(titleSlug, { data: question, timestamp: Date.now() });
-  return question;
-}
-
-app.get("/api/problems/random", authMiddleware, async (req, res) => {
-  try {
-    const difficulty = req.query.difficulty;
-    const pick = await pickQuestion({ difficulty });
-    if (!pick) {
-      return res.status(404).json({ error: "No questions found" });
-    }
-    res.json({ question: pick });
-  } catch (error) {
-    res.status(502).json({ error: "LeetCode API error" });
-  }
+app.get("/api/problems/random", authMiddleware, (req, res) => {
+  const difficulty = req.query.difficulty;
+  const pick = pickQuestion({ difficulty });
+  if (!pick) return res.status(404).json({ error: "No questions found" });
+  res.json({ question: pick });
 });
 
 app.get("/api/problems/:slug", authMiddleware, async (req, res) => {
-  try {
-    const problem = await fetchLeetCodeProblemDetail(req.params.slug);
-    if (!problem) return res.status(404).json({ error: "Problem not found" });
-    res.json({ problem });
-  } catch (error) {
-    res.status(502).json({ error: "LeetCode API error" });
-  }
+  const slug = req.params.slug;
+  const problem = slug && String(slug).startsWith(BUILTIN_PREFIX) ? getBuiltinProblem(slug) : null;
+  if (!problem) return res.status(404).json({ error: "Problem not found" });
+  res.json({ problem });
 });
 
 const PISTON_URL = "https://emkc.org/api/v2/piston";
@@ -316,31 +218,96 @@ function parseMetaData(metaData) {
     const name = o.name || o.methodName;
     const params = o.params || o.paramTypes || [];
     const numParams = Array.isArray(params) ? params.length : 0;
-    return name ? { methodName: name, numParams } : null;
+    const paramTypes = Array.isArray(params) ? params.map((p) => (p.type || "integer").toLowerCase()) : [];
+    const firstParamIsArray = paramTypes[0] && paramTypes[0].includes("[]");
+    return name ? { methodName: name, numParams, paramTypes, firstParamIsArray } : null;
   } catch (_) {
     return null;
   }
 }
 
+/** Extract expected output strings from problem description HTML, in example order. */
+function parseExpectedFromContent(content) {
+  if (!content || typeof content !== "string") return [];
+  const out = [];
+  const normalized = content
+    .replace(/<pre[^>]*>[\s\S]*?<\/pre>/gi, (pre) => pre.replace(/<[^>]+>/g, ""))
+    .replace(/<code[^>]*>[\s\S]*?<\/code>/gi, (c) => c.replace(/<[^>]+>/g, ""))
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ");
+  const stripTags = content.replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/\s+/g, " ");
+  const combined = normalized + "\n" + stripTags;
+  const patterns = [
+    /Output\s*:\s*["']([^"']*)["']/gi,
+    /Output\s*:\s*`([^`]+)`/gi,
+    /(?:Output|output)\s*:\s*["']([^"']*)["']/gi,
+    /Output\s*:\s*(\d+)\b/gi,
+    /Output\s*:\s*(\[[^\]]*\])/gi,
+    /Output\s*:\s*(\{[^}]*\})/gi,
+    /Output\s*:\s*(true|false|null)/gi,
+    /(?:<strong>|\\*\\*)\s*Output[^:]*:\s*["']?([^"'<\]}\s][^<\]}\n]{0,200})["']?/gi,
+    /Output\s*:\s*([^<\n\[\]]+?)(?=\s*(?:Explanation|Note|Constraints|Example|Input|$))/gi
+  ];
+  for (const re of patterns) {
+    out.length = 0;
+    re.lastIndex = 0;
+    let m;
+    const str = re.source.includes("strong") ? content : combined;
+    while ((m = re.exec(str)) !== null) {
+      const val = (m[1] || "").replace(/^["'\s`]+|["'\s`]+$/g, "").trim();
+      if (val && val.length < 500 && !/^Input\s*:/i.test(val)) out.push(val);
+    }
+    if (out.length > 0) return out;
+  }
+  return out;
+}
+
 /** Parse exampleTestcases into [{ stdin, expected }]. Each test = numParams input lines + 1 expected line. */
-function parseTestCases(exampleTestcases, numParams) {
+function parseTestCases(exampleTestcases, numParamsFromMeta) {
   if (!exampleTestcases || typeof exampleTestcases !== "string") return [];
   const lines = exampleTestcases.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return [];
-  if (numParams == null || numParams < 0) {
+  if (numParamsFromMeta == null || numParamsFromMeta < 0) {
     if (lines.length >= 2) return [{ stdin: lines.slice(0, -1).join("\n"), expected: lines[lines.length - 1] }];
     return [{ stdin: lines[0] || "", expected: "" }];
   }
-  const blockSize = numParams + 1;
-  const cases = [];
-  for (let i = 0; i + blockSize <= lines.length; i += blockSize) {
-    const stdin = lines.slice(i, i + numParams).join("\n");
-    const expected = lines[i + numParams];
-    cases.push({ stdin, expected });
+  let numParams = numParamsFromMeta;
+  if (numParams === 1 && lines.length >= 3 && lines.length % 3 === 0) {
+    numParams = 2;
   }
-  if (cases.length === 0 && lines.length >= numParams) {
-    const stdin = lines.slice(0, numParams).join("\n");
-    cases.push({ stdin, expected: "" });
+  const blockSize = numParams + 1;
+  let cases = [];
+  if (lines.length === numParams * 2) {
+    cases = [
+      { stdin: lines.slice(0, numParams).join("\n"), expected: "" },
+      { stdin: lines.slice(numParams, numParams * 2).join("\n"), expected: "" }
+    ];
+  } else {
+    for (let i = 0; i + blockSize <= lines.length; i += blockSize) {
+      const stdin = lines.slice(i, i + numParams).join("\n");
+      const expected = lines[i + numParams];
+      cases.push({ stdin, expected });
+    }
+    if (cases.length === 0 && lines.length >= numParams) {
+      const stdin = lines.slice(0, numParams).join("\n");
+      cases.push({ stdin, expected: "" });
+    }
+  }
+  if (cases.length === 1 && numParams >= 3 && lines.length >= 4) {
+    for (let tryParams = numParams - 1; tryParams >= 2; tryParams--) {
+      const tryBlock = tryParams + 1;
+      if (lines.length % tryBlock !== 0) continue;
+      const tryCases = [];
+      for (let i = 0; i + tryBlock <= lines.length; i += tryBlock) {
+        tryCases.push({ stdin: lines.slice(i, i + tryParams).join("\n"), expected: lines[i + tryParams] });
+      }
+      if (tryCases.length >= 2) {
+        cases = tryCases;
+        break;
+      }
+    }
   }
   return cases;
 }
@@ -357,12 +324,58 @@ function normalizeOutput(s) {
 }
 
 function outputMatches(actual, expected) {
-  return normalizeOutput(actual) === normalizeOutput(expected);
+  if (normalizeOutput(actual) === normalizeOutput(expected)) return true;
+  // LeetCode sometimes gives the modified-array as "expected" for in-place return-length problems; accept if actual equals array length.
+  const actualStr = String(actual ?? "").trim();
+  let expectedParsed = null;
+  try {
+    expectedParsed = JSON.parse(String(expected ?? "").trim());
+  } catch (_) {}
+  if (expectedParsed != null && Array.isArray(expectedParsed) && /^\d+$/.test(actualStr)) {
+    if (Number(actualStr) === expectedParsed.length) return true;
+  }
+  return false;
+}
+
+/** For in-place "return new length" problems: when actual is a number, compute expected k from stdin (nums and val) and accept if actual === k. */
+function passesReturnLengthHeuristic(actual, expected, stdin) {
+  const actualStr = String(actual ?? "").trim();
+  if (!/^\d+$/.test(actualStr)) return false;
+  const stdinStr = String(stdin ?? "").trim();
+  const lines = stdinStr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return false;
+  let arr = null;
+  try {
+    arr = JSON.parse(lines[0]);
+  } catch (_) {}
+  if (!Array.isArray(arr)) return false;
+  let val;
+  try {
+    val = JSON.parse(lines[lines.length - 1]);
+  } catch (_) {
+    val = lines[lines.length - 1];
+  }
+  const k = arr.filter((x) => x !== val).length;
+  return Number(actualStr) === k;
 }
 
 function wrapPythonLeetCodeHarness(code, hasStdin, meta) {
   if (!hasStdin || !/class\s+Solution\s*[:(]/.test(code) || /if\s+__name__\s*==\s*[\'"]__main__[\'"]\s*:/m.test(code)) {
     return code;
+  }
+  // Ensure the last def/class has a body so we don't get IndentationError when appending __main__
+  let c = code.trimEnd();
+  const lines = c.split("\n");
+  let lastNonBlank = "";
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim().length > 0) {
+      lastNonBlank = lines[i];
+      break;
+    }
+  }
+  if (lastNonBlank && /^\s*def\s+.+\)\s*:\s*$/.test(lastNonBlank)) {
+    const baseIndent = (lastNonBlank.match(/^(\s*)/) || [""])[1];
+    c = c + "\n" + baseIndent + "    pass";
   }
   const methodName = meta?.methodName;
   const numParams = meta?.numParams;
@@ -374,7 +387,7 @@ function wrapPythonLeetCodeHarness(code, hasStdin, meta) {
     ? `_n = ${numParams}`
     : `_n = len(_args)\n      try:\n        _sig = inspect.signature(_meth)\n        _n = max(0, len(_sig.parameters) - 1)\n      except Exception: pass`;
   return (
-    code +
+    c +
     "\n\nif __name__ == \"__main__\":\n  import sys, json, inspect\n  try:\n    _in = sys.stdin.read().strip()\n    if _in:\n      _lines = [L.strip() for L in _in.split(\"\\n\") if L.strip()]\n      _args = []\n      for L in _lines:\n        try: _args.append(json.loads(L))\n        except Exception: _args.append(L)\n      _sol = Solution()\n      " +
     getMeth +
     "\n      if _meth:\n        " +
@@ -428,14 +441,92 @@ function runLocalJava(code, stdin) {
     .catch((err) => fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: "", stderr: String(err.message), runTimeMs: Date.now() - start })));
 }
 
-function runLocalC(code, stdin) {
+function wrapCLeetCodeHarness(code, meta) {
+  const methodName = meta?.methodName || "removeElement";
+  const numParams = meta?.numParams != null ? meta.numParams : 2;
+  const oneParam = numParams < 2;
+  const readSecond = oneParam
+    ? ""
+    : "  if (!fgets(line, sizeof(line), stdin)) return 1;\n  val = (int)strtol(line, NULL, 10);";
+  const call = oneParam
+    ? `  int result = ${methodName}(nums, n);\n  printf("%d\\n", result);`
+    : `  printf("%d\\n", ${methodName}(nums, n, val));`;
+  return `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+${code}
+
+#define MAX_N 10000
+int main(void) {
+  static int nums[MAX_N];
+  int n = 0, val = 0;
+  char line[80000];
+  if (!fgets(line, sizeof(line), stdin)) return 1;
+  char *p = line;
+  while (*p) {
+    if (*p == '-' || (*p >= '0' && *p <= '9')) {
+      nums[n++] = (int)strtol(p, &p, 10);
+      if (n >= MAX_N) break;
+    } else p++;
+  }
+${readSecond}
+${call}
+  return 0;
+}
+`;
+}
+
+/** C harness for methods that take only int params (e.g. fib(int n), uniquePaths(int m, int n)). */
+function wrapCIntHarness(code, meta) {
+  const methodName = meta?.methodName || "fn";
+  const numParams = meta?.numParams != null ? meta.numParams : 1;
+  const readSecond = numParams >= 2
+    ? "  if (!fgets(line, sizeof(line), stdin)) return 1;\n  b = (int)strtol(line, NULL, 10);"
+    : "";
+  const call = numParams >= 2
+    ? `  int result = ${methodName}(a, b);\n  printf("%d\\n", result);`
+    : `  int result = ${methodName}(a);\n  printf("%d\\n", result);`;
+  const isBool = /\bbool\s+\w+\s*\(/.test(code);
+  const boolCall = numParams >= 2
+    ? `  int r = (int)${methodName}(a, b);\n  printf("%s\\n", r ? "true" : "false");`
+    : `  int r = (int)${methodName}(a);\n  printf("%s\\n", r ? "true" : "false");`;
+  const printStmt = isBool ? boolCall : call;
+  const stdbool = isBool ? "\n#include <stdbool.h>" : "";
+  return `#include <stdio.h>
+#include <stdlib.h>${stdbool}
+
+${code}
+
+int main(void) {
+  char line[256];
+  int a = 0, b = 0;
+  if (!fgets(line, sizeof(line), stdin)) return 1;
+  a = (int)strtol(line, NULL, 10);
+${readSecond}
+${printStmt}
+  return 0;
+}
+`;
+}
+
+function runLocalC(code, stdin, meta) {
   const start = Date.now();
   const tmpDir = path.join(os.tmpdir(), `run_${uuid().replace(/-/g, "")}`);
   const srcFile = path.join(tmpDir, "main.c");
   const outFile = path.join(tmpDir, "main");
+  const hasStdin = String(stdin).trim().length > 0;
+  const hasMain = /\bint\s+main\s*\(/.test(code);
+  const hasIntReturnAndArrayParam = /\bint\s+\w+\s*\(\s*int\s*\*/.test(code);
+  const needsArrayHarness = meta?.methodName && hasIntReturnAndArrayParam && (!hasMain || hasStdin);
+  const needsIntHarness = meta?.methodName && hasStdin && !hasMain && meta.firstParamIsArray === false;
+  let codeToRun = code;
+  if (needsArrayHarness) codeToRun = wrapCLeetCodeHarness(code, meta);
+  else if (needsIntHarness) codeToRun = wrapCIntHarness(code, meta);
+  else if (!hasMain) codeToRun = code + "\n\nint main(void) { return 0; }\n";
   return fs.promises.mkdir(tmpDir, { recursive: true })
-    .then(() => fs.promises.writeFile(srcFile, code, "utf8"))
-    .then(() => runWithStdin("gcc", ["-o", "main", "main.c"], "", tmpDir))
+    .then(() => fs.promises.writeFile(srcFile, codeToRun, "utf8"))
+    .then(() => runWithStdin("gcc", ["-std=c99", "-o", "main", "main.c"], "", tmpDir))
     .then((compile) => {
       if (compile.code !== 0 && compile.code !== null) {
         return fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: "", stderr: compile.stderr || "Compilation failed", runTimeMs: Date.now() - start }));
@@ -447,49 +538,108 @@ function runLocalC(code, stdin) {
     .catch((err) => fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: "", stderr: String(err.message), runTimeMs: Date.now() - start })));
 }
 
-function runLocalCpp(code, stdin) {
+function wrapCppLeetCodeHarness(code, meta) {
+  const methodName = meta?.methodName || "unknown";
+  const numParams = meta?.numParams != null ? meta.numParams : 2;
+  const readSecond = numParams >= 2 ? "  std::getline(std::cin, line2);" : "";
+  const callTwo = numParams >= 2 ? `  int val = line2.empty() ? 0 : std::stoi(line2);
+  auto result = sol.${methodName}(nums, val);
+  print_result(result);` : `  auto result = sol.${methodName}(nums);
+  print_result(result);`;
+  const harness = `
+#include <iostream>
+#include <vector>
+#include <sstream>
+#include <string>
+#include <cstdlib>
+using namespace std;
+
+${code}
+
+static void print_result(int x) { std::cout << x << std::endl; }
+static void print_result(bool x) { std::cout << (x ? "true" : "false") << std::endl; }
+static void print_result(double x) { std::cout << x << std::endl; }
+static void print_result(const std::vector<int>& v) {
+  std::cout << "[";
+  for (size_t i = 0; i < v.size(); i++) { if (i) std::cout << ","; std::cout << v[i]; }
+  std::cout << "]" << std::endl;
+}
+
+int main() {
+  std::string line1, line2;
+  if (!std::getline(std::cin, line1)) return 0;
+${readSecond}
+  if (line1.empty()) return 0;
+  std::vector<int> nums;
+  std::string s = line1;
+  if (s.size() >= 2) s = s.substr(1, s.size() - 2);
+  std::istringstream ss(s);
+  std::string token;
+  while (std::getline(ss, token, ',')) {
+    if (!token.empty()) nums.push_back(std::stoi(token));
+  }
+  Solution sol;
+${callTwo}
+  return 0;
+}
+`;
+  return harness;
+}
+
+/** C++ harness for methods that take only int params (e.g. fib(int n), uniquePaths(int m, int n)). */
+function wrapCppIntHarness(code, meta) {
+  const methodName = meta?.methodName || "unknown";
+  const numParams = meta?.numParams != null ? meta.numParams : 1;
+  const readSecond = numParams >= 2 ? "  std::getline(std::cin, line2);\n  int b = line2.empty() ? 0 : std::stoi(line2);" : "";
+  const call = numParams >= 2
+    ? `  auto result = sol.${methodName}(a, b);\n  print_result(result);`
+    : `  auto result = sol.${methodName}(a);\n  print_result(result);`;
+  return `
+#include <iostream>
+#include <string>
+#include <cstdlib>
+using namespace std;
+
+${code}
+
+static void print_result(int x) { std::cout << x << std::endl; }
+static void print_result(bool x) { std::cout << (x ? "true" : "false") << std::endl; }
+static void print_result(double x) { std::cout << x << std::endl; }
+
+int main() {
+  std::string line1, line2;
+  if (!std::getline(std::cin, line1)) return 0;
+${readSecond}
+  int a = line1.empty() ? 0 : std::stoi(line1);
+${call}
+  return 0;
+}
+`;
+}
+
+function runLocalCpp(code, stdin, meta) {
   const start = Date.now();
   const tmpDir = path.join(os.tmpdir(), `run_${uuid().replace(/-/g, "")}`);
   const srcFile = path.join(tmpDir, "main.cpp");
   const outFile = path.join(tmpDir, "main");
+  const hasStdin = String(stdin).trim().length > 0;
+  const hasMain = /int\s+main\s*\(|void\s+main\s*\(/.test(code);
+  const hasSolution = /\bclass\s+Solution\b/.test(code);
+  const needsHarness = meta?.methodName && hasSolution && (!hasMain || hasStdin);
+  let codeToRun = code;
+  if (needsHarness) {
+    codeToRun = meta?.firstParamIsArray === false ? wrapCppIntHarness(code, meta) : wrapCppLeetCodeHarness(code, meta);
+  } else if (!hasMain) {
+    codeToRun = code + "\n\nint main() { return 0; }\n";
+  }
   return fs.promises.mkdir(tmpDir, { recursive: true })
-    .then(() => fs.promises.writeFile(srcFile, code, "utf8"))
-    .then(() => runWithStdin("g++", ["-o", "main", "main.cpp"], "", tmpDir))
+    .then(() => fs.promises.writeFile(srcFile, codeToRun, "utf8"))
+    .then(() => runWithStdin("g++", ["-std=c++11", "-o", "main", "main.cpp"], "", tmpDir))
     .then((compile) => {
       if (compile.code !== 0 && compile.code !== null) {
         return fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: "", stderr: compile.stderr || "Compilation failed", runTimeMs: Date.now() - start }));
       }
       return runWithStdin(outFile, [], stdin, tmpDir).then((r) => {
-        return fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: r.stdout, stderr: r.stderr, runTimeMs: Date.now() - start }));
-      });
-    })
-    .catch((err) => fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: "", stderr: String(err.message), runTimeMs: Date.now() - start })));
-}
-
-function runLocalGo(code, stdin) {
-  const start = Date.now();
-  const tmpDir = path.join(os.tmpdir(), `run_${uuid().replace(/-/g, "")}`);
-  const srcFile = path.join(tmpDir, "main.go");
-  return fs.promises.mkdir(tmpDir, { recursive: true })
-    .then(() => fs.promises.writeFile(srcFile, code, "utf8"))
-    .then(() => runWithStdin("go", ["run", "main.go"], stdin, tmpDir))
-    .then((r) => fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: r.stdout, stderr: r.stderr, runTimeMs: Date.now() - start })))
-    .catch((err) => fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: "", stderr: String(err.message), runTimeMs: Date.now() - start })));
-}
-
-function runLocalCsharp(code, stdin) {
-  const start = Date.now();
-  const tmpDir = path.join(os.tmpdir(), `run_${uuid().replace(/-/g, "")}`);
-  const srcFile = path.join(tmpDir, "Program.cs");
-  const exeFile = path.join(tmpDir, "Program.exe");
-  return fs.promises.mkdir(tmpDir, { recursive: true })
-    .then(() => fs.promises.writeFile(srcFile, code, "utf8"))
-    .then(() => runWithStdin("mcs", ["-out:Program.exe", "Program.cs"], "", tmpDir))
-    .then((compile) => {
-      if (compile.code !== 0 && compile.code !== null) {
-        return fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: "", stderr: compile.stderr || "Compilation failed", runTimeMs: Date.now() - start }));
-      }
-      return runWithStdin("mono", [exeFile], stdin, tmpDir).then((r) => {
         return fs.promises.rm(tmpDir, { recursive: true }).catch(() => {}).then(() => ({ stdout: r.stdout, stderr: r.stderr, runTimeMs: Date.now() - start }));
       });
     })
@@ -501,23 +651,19 @@ const localRunnersMap = {
   python: (code, stdin, m) => runLocalPython(code, stdin, m),
   java: runLocalJava,
   c: runLocalC,
-  "c++": runLocalCpp,
-  csharp: runLocalCsharp,
-  go: runLocalGo
+  "c++": runLocalCpp
 };
 
-const extMap = { javascript: "js", python: "py", java: "java", cpp: "cpp", c: "c", csharp: "cs", go: "go", rust: "rs", typescript: "ts" };
+const extMap = { javascript: "js", python: "py", java: "java", cpp: "cpp", "c++": "cpp", c: "c", rust: "rs", typescript: "ts" };
 
 async function runCodeOnce({ language, code, stdin = "", problemSlug, metaData: clientMeta }) {
   const lang = String(language).toLowerCase().replace(/[^a-z0-9]/g, "");
-  const langMap = { javascript: "javascript", js: "javascript", python: "python", py: "python", java: "java", cpp: "c++", c: "c", csharp: "csharp", go: "go", rust: "rust", typescript: "typescript", ts: "typescript" };
+  const langMap = { javascript: "javascript", js: "javascript", python: "python", py: "python", java: "java", cpp: "c++", c: "c", rust: "rust", typescript: "typescript", ts: "typescript" };
   const pistonLang = langMap[lang] || language;
   let meta = parseMetaData(clientMeta);
   if (problemSlug && !meta) {
-    try {
-      const problem = await fetchLeetCodeProblemDetail(problemSlug);
-      if (problem?.metaData) meta = parseMetaData(problem.metaData);
-    } catch (_) {}
+    const builtin = problemSlug && String(problemSlug).startsWith(BUILTIN_PREFIX) ? getBuiltinProblem(problemSlug) : null;
+    if (builtin?.metaData) meta = parseMetaData(builtin.metaData);
   }
   const hasStdin = String(stdin).trim().length > 0;
   if (langMap[lang] === "javascript" && hasStdin && !meta) meta = inferJsMethodName(code);
@@ -536,8 +682,12 @@ async function runCodeOnce({ language, code, stdin = "", problemSlug, metaData: 
   };
   const useLocalPythonFirst = pistonLang === "python" && hasStdin && /class\s+Solution\s*[:(]/.test(code) && !/if\s+__name__\s*==\s*[\'"]__main__[\'"]\s*:/m.test(code);
   const useLocalJsFirst = pistonLang === "javascript" && hasStdin && meta?.methodName;
+  const useLocalCppFirst = pistonLang === "c++" && meta?.methodName && /\bclass\s+Solution\b/.test(code);
+  const useLocalCFirst = pistonLang === "c" && hasStdin && meta?.methodName && (/\bint\s+\w+\s*\(\s*int\s*\*/.test(code) || meta.firstParamIsArray === false);
   if (useLocalPythonFirst) return runLocalPython(code, stdin, meta);
   if (useLocalJsFirst) return runLocalJavaScript(code, stdin, meta);
+  if (useLocalCppFirst) return runLocalCpp(code, stdin, meta);
+  if (useLocalCFirst) return runLocalC(code, stdin, meta);
   try {
     return await tryPiston();
   } catch (pistonErr) {
@@ -565,15 +715,28 @@ app.post("/api/run-tests", authMiddleware, async (req, res) => {
     if (!language || !code) return res.status(400).json({ error: "language and code required" });
     let meta = parseMetaData(clientMeta);
     let exampleTestcases = clientExamples;
-    if (problemSlug) {
-      try {
-        const problem = await fetchLeetCodeProblemDetail(problemSlug);
-        if (problem?.metaData) meta = parseMetaData(problem.metaData);
-        if (problem?.exampleTestcases != null) exampleTestcases = problem.exampleTestcases;
-      } catch (_) {}
+    let problem = null;
+    let testCases = [];
+    if (problemSlug && String(problemSlug).startsWith(BUILTIN_PREFIX)) {
+      problem = getBuiltinProblem(problemSlug);
+      if (problem?.metaData) meta = parseMetaData(problem.metaData);
+      testCases = getBuiltinTestCases(problemSlug);
     }
-    const numParams = meta?.numParams;
-    const testCases = parseTestCases(exampleTestcases, numParams);
+    if (testCases.length === 0 && problemSlug && String(problemSlug).startsWith(BUILTIN_PREFIX)) {
+      problem = problem || getBuiltinProblem(problemSlug);
+      if (problem?.metaData) meta = parseMetaData(problem.metaData);
+      if (problem?.exampleTestcases != null) exampleTestcases = problem.exampleTestcases;
+    }
+    if (testCases.length === 0) {
+      const numParams = meta?.numParams;
+      testCases = parseTestCases(exampleTestcases, numParams);
+      if (problem?.content && testCases.length > 0) {
+        const expectedFromContent = parseExpectedFromContent(problem.content);
+        if (expectedFromContent.length >= testCases.length) {
+          testCases = testCases.map((tc, i) => ({ ...tc, expected: expectedFromContent[i] ?? tc.expected }));
+        }
+      }
+    }
     if (testCases.length === 0) {
       return res.json({ results: [], summary: { total: 0, passed: 0, failed: 0 }, error: "No example test cases for this problem." });
     }
@@ -584,10 +747,14 @@ app.post("/api/run-tests", authMiddleware, async (req, res) => {
         const runResult = await runCodeOnce({ language, code, stdin, problemSlug, metaData: clientMeta });
         const actual = (runResult.stdout || "").trim();
         const stderr = (runResult.stderr || "").trim();
-        const passed = outputMatches(actual, expected);
+        const expectedTrimmed = (expected || "").trim();
+        const noExpected = expectedTrimmed === "";
+        let passed = noExpected ? false : outputMatches(actual, expected);
+        if (!passed && (actual || expected)) passed = passesReturnLengthHeuristic(actual, expected, stdin);
         results.push({
           index: i + 1,
-          passed,
+          passed: noExpected ? false : passed,
+          noExpected: noExpected || undefined,
           stdin,
           expected: expected.trim(),
           actual: actual || "(no output)",
@@ -618,6 +785,48 @@ app.post("/api/run-tests", authMiddleware, async (req, res) => {
     res.status(500).json({ error: "Test run failed", detail: err.message || String(err) });
   }
 });
+
+/** Run all test cases for a problem; used for submit validation. Returns { allPassed, failedCount, total, maxRunTimeMs }. */
+async function runAllTestsForSubmit(problemSlug, language, code, metaData) {
+  let testCases = [];
+  let meta = parseMetaData(metaData);
+  let problem = null;
+  if (problemSlug && String(problemSlug).startsWith(BUILTIN_PREFIX)) {
+    problem = getBuiltinProblem(problemSlug);
+    if (problem?.metaData) meta = parseMetaData(problem.metaData);
+    testCases = getBuiltinTestCases(problemSlug);
+  }
+  if (testCases.length === 0) {
+    problem = problem || (problemSlug && String(problemSlug).startsWith(BUILTIN_PREFIX) ? getBuiltinProblem(problemSlug) : null);
+    if (problem?.metaData) meta = parseMetaData(problem.metaData);
+    const exampleTestcases = problem?.exampleTestcases || "";
+    testCases = parseTestCases(exampleTestcases, meta?.numParams);
+    if (problem?.content && testCases.length > 0) {
+      const expectedFromContent = parseExpectedFromContent(problem.content);
+      if (expectedFromContent.length >= testCases.length) {
+        testCases = testCases.map((tc, i) => ({ ...tc, expected: expectedFromContent[i] ?? tc.expected }));
+      }
+    }
+  }
+  if (testCases.length === 0) return { allPassed: false, failedCount: 1, total: 0, maxRunTimeMs: null };
+  let maxRunTimeMs = 0;
+  let failedCount = 0;
+  for (const { stdin, expected } of testCases) {
+    try {
+      const runResult = await runCodeOnce({ language, code, stdin, problemSlug, metaData: problem?.metaData || metaData });
+      const actual = (runResult.stdout || "").trim();
+      const expectedTrimmed = (expected || "").trim();
+      const noExpected = expectedTrimmed === "";
+      let passed = !noExpected && outputMatches(actual, expected);
+      if (!passed && (actual || expected)) passed = passesReturnLengthHeuristic(actual, expected, stdin);
+      if (!passed) failedCount++;
+      if (runResult.runTimeMs != null) maxRunTimeMs = Math.max(maxRunTimeMs, runResult.runTimeMs);
+    } catch (_) {
+      failedCount++;
+    }
+  }
+  return { allPassed: failedCount === 0, failedCount, total: testCases.length, maxRunTimeMs: maxRunTimeMs || null };
+}
 
 app.get("/api/leaderboard", async (req, res) => {
   const db = await getDb();
@@ -855,10 +1064,10 @@ app.post("/api/matches", authMiddleware, async (req, res) => {
   let question = null;
 
   if (problemSlug) {
-    const questions = await fetchLeetCodeQuestions();
-    question = questions.find((q) => q.titleSlug === problemSlug);
+    const p = String(problemSlug).startsWith(BUILTIN_PREFIX) ? getBuiltinProblem(problemSlug) : null;
+    question = p ? { titleSlug: p.titleSlug, title: p.title, difficulty: p.difficulty } : null;
   } else {
-    question = await pickQuestion({ difficulty });
+    question = pickQuestion({ difficulty });
   }
 
   if (!question) {
@@ -951,10 +1160,7 @@ app.get("/api/matches/:id", authMiddleware, async (req, res) => {
 });
 
 app.post("/api/matches/:id/submit", authMiddleware, async (req, res) => {
-  const { runtimeMs } = req.body || {};
-  if (!runtimeMs || runtimeMs <= 0) {
-    return res.status(400).json({ error: "runtimeMs must be positive" });
-  }
+  const { code, language, runtimeMs: clientRuntimeMs } = req.body || {};
   const db = await getDb();
   const match = await db.get("SELECT * FROM matches WHERE id = ?", req.params.id);
   if (!match) {
@@ -971,6 +1177,35 @@ app.post("/api/matches/:id/submit", authMiddleware, async (req, res) => {
   );
   if (!player) {
     return res.status(403).json({ error: "Not part of this match" });
+  }
+
+  let runtimeMs = clientRuntimeMs;
+  const problemSlug = match.problem_slug;
+  let metaData = null;
+  if (problemSlug && String(problemSlug).startsWith(BUILTIN_PREFIX)) {
+    const builtin = getBuiltinProblem(problemSlug);
+    if (builtin) metaData = builtin.metaData;
+  } else if (problemSlug && String(problemSlug).startsWith(BUILTIN_PREFIX)) {
+    const problem = getBuiltinProblem(problemSlug);
+    if (problem) metaData = problem.metaData;
+  }
+
+  if (code && language && problemSlug) {
+    const validation = await runAllTestsForSubmit(problemSlug, language, code, metaData);
+    if (validation.total > 0) {
+      if (!validation.allPassed) {
+        const msg = `${validation.total - validation.failedCount}/${validation.total} test cases passed. Pass all tests before submitting.`;
+        return res.status(400).json({ error: msg });
+      }
+      if (validation.maxRunTimeMs != null) runtimeMs = validation.maxRunTimeMs;
+    }
+  }
+
+  if (!runtimeMs || runtimeMs <= 0) {
+    return res.status(400).json({
+      error: "Run or Test your code first to get a runtime, then Submit.",
+      detail: "Solution must pass all tests. Use Test to verify before submitting."
+    });
   }
 
   await db.run(
@@ -1008,18 +1243,15 @@ app.post("/api/matches/:id/submit", authMiddleware, async (req, res) => {
       return res.json({ status: "waiting" });
     }
 
-    const matchStart = new Date(match.created_at).getTime();
-    const TIME_WEIGHT_MS_PER_SEC = 20;
-    const playersWithComposite = players.map((p) => {
-      const submittedAt = p.submitted_at ? new Date(p.submitted_at).getTime() : matchStart;
-      const timeToSolveSec = Math.max(0, (submittedAt - matchStart) / 1000);
-      const composite = (p.runtime_ms || 0) + TIME_WEIGHT_MS_PER_SEC * timeToSolveSec;
-      return { ...p, composite };
+    // Winner = whoever submitted a correct answer first (earliest submitted_at)
+    const playersWithTime = players.map((p) => {
+      const submittedAt = p.submitted_at ? new Date(p.submitted_at).getTime() : Infinity;
+      return { ...p, submittedAt };
     });
-    const [a, b] = playersWithComposite;
+    const [a, b] = playersWithTime;
     let scoreA = 0.5, scoreB = 0.5, winnerId = null;
-    if (a.composite < b.composite) { scoreA = 1; scoreB = 0; winnerId = a.user_id; }
-    else if (b.composite < a.composite) { scoreA = 0; scoreB = 1; winnerId = b.user_id; }
+    if (a.submittedAt < b.submittedAt) { scoreA = 1; scoreB = 0; winnerId = a.user_id; }
+    else if (b.submittedAt < a.submittedAt) { scoreA = 0; scoreB = 1; winnerId = b.user_id; }
 
     const ranked = match.ranked !== 0 && match.ranked != null;
     const eloUpdate = ranked ? computeEloUpdate({ eloA: a.elo_before, eloB: b.elo_before, scoreA, scoreB, runtimeA: a.runtime_ms, runtimeB: b.runtime_ms }) : null;
@@ -1036,7 +1268,7 @@ app.post("/api/matches/:id/submit", authMiddleware, async (req, res) => {
     await db.run("UPDATE matches SET status = ? WHERE id = ?", "complete", match.id);
     await db.run("COMMIT");
 
-    const me = playersWithComposite.find((p) => p.user_id === req.user.sub);
+    const me = playersWithTime.find((p) => p.user_id === req.user.sub);
     const isWinner = winnerId == null ? null : !!(me && winnerId === me.user_id);
     const eloDelta = ranked && me ? (me.user_id === a.user_id ? finalEloA - a.elo_before : finalEloB - b.elo_before) : 0;
     resultPayload = { status: "complete", winnerId, k, ranked, isWinner, eloDelta };

@@ -35,7 +35,8 @@ const testCodeBtn = document.getElementById("testCode");
 const problemTitleEl = document.getElementById("problemTitle");
 const problemDifficultyEl = document.getElementById("problemDifficulty");
 const problemContentEl = document.getElementById("problemContent");
-const codeEditor = document.getElementById("codeEditor");
+const codeEditorTextarea = document.getElementById("codeEditor");
+let codeEditor = null; // set after CodeMirror init
 const languageSelect = document.getElementById("languageSelect");
 const runCodeBtn = document.getElementById("runCode");
 const testResultEl = document.getElementById("testResult");
@@ -52,6 +53,40 @@ function setToken(token) {
   } else {
     localStorage.removeItem("token");
   }
+}
+
+function getCodeEditorMode(lang) {
+  const modes = { javascript: "javascript", python: "python", java: "text/x-java", cpp: "text/x-c++src", c: "text/x-csrc" };
+  return modes[lang] || "javascript";
+}
+
+function setCodeEditorMode(lang) {
+  if (codeEditor) codeEditor.setOption("mode", getCodeEditorMode(lang));
+}
+
+function setCodeEditorValue(value) {
+  if (codeEditor) codeEditor.setValue(value != null ? String(value) : "");
+  else if (codeEditorTextarea) codeEditorTextarea.value = value != null ? String(value) : "";
+}
+
+function initCodeEditor() {
+  if (!codeEditorTextarea || typeof CodeMirror === "undefined") return;
+  codeEditor = CodeMirror.fromTextArea(codeEditorTextarea, {
+    mode: getCodeEditorMode(languageSelect?.value || "javascript"),
+    theme: "dracula",
+    lineNumbers: true,
+    indentUnit: 2,
+    tabSize: 2,
+    indentWithTabs: false,
+    lineWrapping: true,
+    autoCloseBrackets: true,
+    matchBrackets: true,
+    extraKeys: {
+      Tab: (cm) => cm.replaceSelection("  ", "end"),
+      "Shift-Tab": "indentLess"
+    }
+  });
+  codeEditor.setSize("100%", "100%");
 }
 
 function show(section) {
@@ -72,7 +107,6 @@ function showResultModal({ isWinner, eloDelta, ranked }) {
   }
   if (resultModal) resultModal.classList.remove("hidden");
 }
-
 function hideResultModal() {
   if (resultModal) resultModal.classList.add("hidden");
 }
@@ -246,7 +280,7 @@ function runPayload(lang, code, stdin) {
 }
 
 runCodeBtn?.addEventListener("click", async () => {
-  const code = codeEditor?.value?.trim();
+  const code = codeEditor?.getValue?.()?.trim() ?? codeEditorTextarea?.value?.trim();
   if (!code) { if (testResultEl) testResultEl.textContent = "No code to run."; testResultEl?.classList.remove("empty"); return; }
   const lang = languageSelect?.value || "javascript";
   if (testResultEl) { testResultEl.textContent = "Running..."; testResultEl.classList.remove("empty"); }
@@ -257,7 +291,9 @@ runCodeBtn?.addEventListener("click", async () => {
     if (result.runTimeMs != null) text += `\n\n--- Run time: ${result.runTimeMs} ms ---`;
     if (testResultEl) testResultEl.textContent = text || "(no output)";
     if (result.runTimeMs != null) { state.lastRunTimeMs = result.runTimeMs; if (runtimeDisplay) runtimeDisplay.textContent = `Last run: ${result.runTimeMs} ms`; }
-  } catch (err) { if (testResultEl) testResultEl.textContent = "Error: " + (err.message || "Run failed"); }
+  } catch (err) {
+    if (testResultEl) testResultEl.textContent = "Error: " + (err.message || "Run failed");
+  }
 });
 
 function escapeHtml(s) {
@@ -286,9 +322,12 @@ function renderTestResults(payload) {
   html += "</div>";
   html += '<div class="test-cases">';
   results.forEach((r) => {
-    const statusClass = r.passed ? "test-case--pass" : "test-case--fail";
-    const statusLabel = r.passed ? "Passed" : "Wrong Answer";
-    const icon = r.passed ? "✓" : "✗";
+    const isRunOnly = r.noExpected === true;
+    const statusClass = r.passed ? "test-case--pass" : isRunOnly ? "test-case--runonly" : "test-case--fail";
+    const hasErrorNoOutput = !r.passed && !(r.actual && r.actual !== "(no output)") && (r.stderr || r.error);
+    const statusLabel = r.passed ? "Passed" : isRunOnly ? "Run only" : hasErrorNoOutput ? "Error" : "Wrong Answer";
+    const icon = r.passed ? "✓" : isRunOnly ? "○" : "✗";
+    const outputDisplay = (r.actual && r.actual !== "(no output)") ? r.actual : (r.stderr || r.error || "(no output)");
     html += `<div class="test-case ${statusClass}" data-test-index="${r.index}">`;
     html += `<button type="button" class="test-case-header" aria-expanded="false" data-test-toggle="${r.index}">`;
     html += `<span class="test-case-icon">${icon}</span>`;
@@ -299,8 +338,8 @@ function renderTestResults(payload) {
     html += '<div class="test-case-details" hidden>';
     html += `<div class="test-case-row"><span class="test-case-key">Input:</span><pre class="test-case-value">${escapeHtml(r.stdin || "(none)")}</pre></div>`;
     html += `<div class="test-case-row"><span class="test-case-key">Expected:</span><pre class="test-case-value">${escapeHtml(r.expected || "(none)")}</pre></div>`;
-    html += `<div class="test-case-row"><span class="test-case-key">Output:</span><pre class="test-case-value">${escapeHtml(r.actual ?? r.error ?? "(no output)")}</pre></div>`;
-    if (r.stderr) html += `<div class="test-case-row"><span class="test-case-key">stderr:</span><pre class="test-case-value test-case-value--stderr">${escapeHtml(r.stderr)}</pre></div>`;
+    html += `<div class="test-case-row"><span class="test-case-key">Output:</span><pre class="test-case-value">${escapeHtml(outputDisplay)}</pre></div>`;
+    if (r.stderr && outputDisplay !== r.stderr) html += `<div class="test-case-row"><span class="test-case-key">stderr:</span><pre class="test-case-value test-case-value--stderr">${escapeHtml(r.stderr)}</pre></div>`;
     if (r.error && !r.actual) html += `<div class="test-case-row"><span class="test-case-key">Error:</span><pre class="test-case-value test-case-value--error">${escapeHtml(r.error)}</pre></div>`;
     html += "</div></div>";
   });
@@ -323,7 +362,7 @@ function renderTestResults(payload) {
 }
 
 testCodeBtn?.addEventListener("click", async () => {
-  const code = codeEditor?.value?.trim();
+  const code = codeEditor?.getValue?.()?.trim() ?? codeEditorTextarea?.value?.trim();
   if (!code) { if (testResultEl) testResultEl.textContent = "No code to test."; testResultEl?.classList.remove("empty"); return; }
   const lang = languageSelect?.value || "javascript";
   const problem = state.currentProblem;
@@ -344,28 +383,23 @@ testCodeBtn?.addEventListener("click", async () => {
 });
 
 languageSelect?.addEventListener("change", () => {
+  setCodeEditorMode(languageSelect.value);
   if (!state.currentProblem?.codeSnippets || !Array.isArray(state.currentProblem.codeSnippets)) return;
   const lang = languageSelect.value;
   const snippet = state.currentProblem.codeSnippets.find((s) => s.langSlug === lang || (s.lang && s.lang.toLowerCase() === lang.toLowerCase()));
-  if (snippet?.code && codeEditor) codeEditor.value = snippet.code;
+  if (snippet?.code && codeEditor) codeEditor.setValue(normalizeEditorCode(snippet.code));
 });
 
 submitSolutionBtn?.addEventListener("click", async () => {
-  const code = codeEditor?.value?.trim();
+  const code = codeEditor?.getValue?.()?.trim() ?? codeEditorTextarea?.value?.trim();
   if (!code) { alert("Write your solution first."); return; }
   const lang = languageSelect?.value || "javascript";
-  if (matchStatus) matchStatus.textContent = "Running your solution...";
-  let runtimeMs = state.lastRunTimeMs;
-  if (runtimeMs == null || runtimeMs <= 0) {
-    try {
-      const runResult = await api("/api/run", { method: "POST", body: JSON.stringify(runPayload(lang, code, "")) });
-      runtimeMs = runResult.runTimeMs;
-      if (runtimeMs != null) { state.lastRunTimeMs = runtimeMs; if (runtimeDisplay) runtimeDisplay.textContent = `Last run: ${runtimeMs} ms`; }
-    } catch (err) { if (matchStatus) matchStatus.textContent = ""; alert("Run failed. Fix your code and try again: " + (err.message || "")); return; }
-  }
-  if (!runtimeMs || runtimeMs <= 0) { if (matchStatus) matchStatus.textContent = ""; alert("Could not measure runtime. Run or Test your code first."); return; }
+  if (matchStatus) matchStatus.textContent = "Validating solution...";
   try {
-    const payload = await api(`/api/matches/${state.currentMatchId}/submit`, { method: "POST", body: JSON.stringify({ runtimeMs }) });
+    const payload = await api(`/api/matches/${state.currentMatchId}/submit`, {
+      method: "POST",
+      body: JSON.stringify({ code, language: lang, runtimeMs: state.lastRunTimeMs || undefined })
+    });
     if (matchStatus) {
       if (payload.status === "waiting") matchStatus.textContent = "Waiting for opponent to submit.";
       else {
@@ -379,7 +413,10 @@ submitSolutionBtn?.addEventListener("click", async () => {
         showResultModal({ isWinner: payload.isWinner, eloDelta: payload.eloDelta, ranked: payload.ranked });
       }
     }
-  } catch (error) { if (matchStatus) matchStatus.textContent = ""; alert(error.message); }
+  } catch (error) {
+    if (matchStatus) matchStatus.textContent = "";
+    alert(error.message || "Submit failed.");
+  }
 });
 
 resultModalLobbyBtn?.addEventListener("click", () => {
@@ -538,6 +575,17 @@ function safeSetText(el, text) { if (el) el.textContent = text; }
 function safeSetHtml(el, html) { if (el) el.innerHTML = html; }
 function safeSetValue(el, value) { if (el) el.value = value != null ? String(value) : ""; }
 
+/** Ensure code has basic indentation (avoid single-line minified paste). */
+function normalizeEditorCode(code) {
+  if (!code || typeof code !== "string") return code;
+  const s = code.trim();
+  if (!s) return s;
+  // If already multi-line with indentation, keep as-is
+  if (/\n\s+/.test(s) && (s.includes("  ") || s.includes("\t"))) return s;
+  // If single line or no internal newlines with spaces, don't mangle (stubs from server are already formatted)
+  return s;
+}
+
 function getSnippetForLang(problem, lang) {
   const snippets = problem?.codeSnippets;
   if (!Array.isArray(snippets) || snippets.length === 0) return null;
@@ -556,7 +604,11 @@ async function openMatch(matchId) {
     const opponent = players.find((p) => p.user_id !== state.user?.id);
     const rankedLabel = match.ranked === 0 ? " · Unranked" : "";
     if (matchMeta) matchMeta.innerHTML = `Match <strong>${match.id}</strong> · ${match.difficulty} · ${match.problem_title}${rankedLabel}`;
-    if (leetcodeLink) leetcodeLink.href = `https://leetcode.com/problems/${match.problem_slug || ""}/`;
+    const isBuiltin = (match.problem_slug || "").startsWith("builtin-");
+    if (leetcodeLink) {
+      if (isBuiltin) { leetcodeLink.href = "#"; leetcodeLink.textContent = "Built-in problem"; leetcodeLink.classList.add("muted"); }
+      else { leetcodeLink.href = `https://leetcode.com/problems/${match.problem_slug || ""}/`; leetcodeLink.textContent = "Open on LeetCode"; leetcodeLink.classList.remove("muted"); }
+    }
     if (matchPlayers) matchPlayers.innerHTML = `<span><strong>You:</strong> ${me ? me.email : "—"}</span><span><strong>Opponent:</strong> ${opponent ? opponent.email : "Waiting..."}</span>`;
     safeSetText(matchStatus, match.status === "waiting" ? "Waiting for opponent to join." : "Run or Test your code, then Submit to lock in your solution.");
     safeSetText(testResultEl, "Run your code to see output here.");
@@ -581,14 +633,18 @@ async function openMatch(matchId) {
       safeSetHtml(problemContentEl, problem.content || "<p>No description available.</p>");
       const lang = languageSelect ? languageSelect.value : "javascript";
       const snippet = getSnippetForLang(problem, lang);
-      safeSetValue(codeEditor, snippet?.code ?? "// Write your solution here...");
+      setCodeEditorValue(normalizeEditorCode(snippet?.code) ?? "// Write your solution here...");
     } else {
       safeSetText(problemTitleEl, match.problem_title || "Problem");
       safeSetHtml(problemDifficultyEl, `<span class="difficulty-easy">${match.difficulty || ""}</span>`);
       safeSetHtml(problemContentEl, "<p>Loading problem description failed. Use the link above to open on LeetCode.</p>");
-      safeSetValue(codeEditor, "// Write your solution here...");
+      setCodeEditorValue("// Write your solution here...");
     }
 
+    if (codeEditor) {
+      setCodeEditorMode(languageSelect?.value || "javascript");
+      setTimeout(() => codeEditor.refresh(), 50);
+    }
     stopMatchPoll();
     state.currentMatchId = matchId;
     state.matchPoll = setInterval(async () => {
@@ -619,4 +675,5 @@ async function openMatch(matchId) {
   }
 }
 
+initCodeEditor();
 bootstrap();
