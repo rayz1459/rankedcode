@@ -1,0 +1,10 @@
+# Render.com blueprint - deploy as Web Service
+services:
+  - type: web
+    name: rankedcode
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production

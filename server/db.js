@@ -1,18 +1,38 @@
-import sqlite3 from "sqlite3";
-import { open } from "sqlite";
+import initSqlJs from "sql.js";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const dbPath = path.join(__dirname, "..", "ranked-leetcode.db");
 
 let dbPromise;
 
+function persist(db) {
+  try {
+    const data = db.export();
+    fs.writeFileSync(dbPath, Buffer.from(data));
+  } catch (err) {
+    console.error("db persist error:", err.message);
+  }
+}
+
 export async function getDb() {
   if (!dbPromise) {
-    dbPromise = open({
-      filename: new URL("../ranked-leetcode.db", import.meta.url).pathname,
-      driver: sqlite3.Database
+    const SQL = await initSqlJs({
+      locateFile: (file) =>
+        path.join(__dirname, "..", "node_modules", "sql.js", "dist", file)
     });
-    const db = await dbPromise;
-    await db.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA foreign_keys = ON;
+    let data = null;
+    try {
+      data = fs.readFileSync(dbPath);
+    } catch (_) {
+      /* new db */
+    }
+    const db = new SQL.Database(data || undefined);
+    db.run("PRAGMA foreign_keys = ON");
+
+    const schema = `
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
@@ -49,12 +69,47 @@ export async function getDb() {
         created_at TEXT NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
-    `);
+    `;
+    db.run(schema);
     try {
-      await db.run("ALTER TABLE matches ADD COLUMN ranked INTEGER NOT NULL DEFAULT 1");
+      db.run("ALTER TABLE matches ADD COLUMN ranked INTEGER NOT NULL DEFAULT 1");
     } catch (_) {
       /* column may already exist */
     }
+    persist(db);
+
+    const wrap = {
+      run(sql, ...params) {
+        if (params.length > 0) {
+          db.run(sql, params);
+        } else {
+          db.run(sql);
+        }
+        persist(db);
+        return Promise.resolve({ changes: db.getRowsModified() });
+      },
+      get(sql, ...params) {
+        const stmt = db.prepare(sql);
+        if (params.length > 0) stmt.bind(params);
+        const row = stmt.step() ? stmt.getAsObject() : undefined;
+        stmt.free();
+        return Promise.resolve(row);
+      },
+      all(sql, ...params) {
+        const stmt = db.prepare(sql);
+        if (params.length > 0) stmt.bind(params);
+        const rows = [];
+        while (stmt.step()) rows.push(stmt.getAsObject());
+        stmt.free();
+        return Promise.resolve(rows);
+      },
+      exec(sql) {
+        db.exec(sql);
+        persist(db);
+        return Promise.resolve();
+      }
+    };
+    dbPromise = Promise.resolve(wrap);
   }
   return dbPromise;
 }

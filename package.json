@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "node server/index.js",
     "start": "node server/index.js"
@@ -13,8 +16,7 @@
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7",
+    "sql.js": "^1.10.2",
     "uuid": "^9.0.1"
   }
 }
