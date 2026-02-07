@@ -15,7 +15,8 @@
     </header>
 
     <main>
-      <section id="auth">
+      <div id="appLoading" class="app-loading" aria-live="polite">Loading…</div>
+      <section id="auth" class="hidden">
         <h2>Sign in or create an account</h2>
         <div class="grid">
           <form id="registerForm">
@@ -33,70 +34,140 @@
         </div>
       </section>
 
-      <section id="lobby" class="hidden">
-        <h2>1v1 Lobby</h2>
-        <div class="grid">
-          <div class="card">
-            <h3>Quick play (Ranked)</h3>
-            <label>
-              Difficulty
-              <select id="queueDifficulty">
-                <option value="">Any</option>
-                <option>Easy</option>
-                <option>Medium</option>
-                <option>Hard</option>
-              </select>
-            </label>
-            <div class="grid">
-              <button id="joinQueue">Start queue</button>
-              <button id="leaveQueue" class="ghost">Cancel queue</button>
+      <section id="lobby" class="hidden lobby-section">
+        <aside class="lobby-sidebar">
+          <div class="lobby-logo">
+            <span class="lobby-logo-icon">&lt;/&gt;</span>
+            <span class="lobby-logo-text">hackcomp</span>
+          </div>
+          <nav class="lobby-nav">
+            <button type="button" class="lobby-nav-item active" data-lobby-page="play" aria-label="Play">
+              <span class="lobby-nav-icon" aria-hidden="true">▶</span>
+              <span>Play</span>
+            </button>
+            <button type="button" class="lobby-nav-item" data-lobby-page="practice" aria-label="Practice">
+              <span class="lobby-nav-icon" aria-hidden="true">◇</span>
+              <span>Practice</span>
+            </button>
+            <button type="button" class="lobby-nav-item" data-lobby-page="leaderboard" aria-label="Leaderboard">
+              <span class="lobby-nav-icon" aria-hidden="true">▣</span>
+              <span>Leaderboard</span>
+            </button>
+            <button type="button" class="lobby-nav-item" data-lobby-page="profile" aria-label="Profile">
+              <span class="lobby-nav-icon" aria-hidden="true">👤</span>
+              <span>Profile</span>
+            </button>
+          </nav>
+          <div id="sessionSidebar" class="lobby-session"></div>
+        </aside>
+        <div class="lobby-main">
+          <div id="lobbyPagePlay" class="lobby-page active" data-page="play">
+            <h2 class="lobby-page-title">Play</h2>
+            <p class="lobby-page-desc">Find a ranked match, create a custom game, or join with a match ID.</p>
+            <div class="lobby-cards grid">
+              <div class="card lobby-card">
+                <h3>Quick play (Ranked)</h3>
+                <label>
+                  Difficulty
+                  <select id="queueDifficulty">
+                    <option value="">Any</option>
+                    <option>Easy</option>
+                    <option>Medium</option>
+                    <option>Hard</option>
+                  </select>
+                </label>
+                <div class="lobby-card-actions">
+                  <button id="joinQueue" class="btn-primary">Start queue</button>
+                  <button id="leaveQueue" class="ghost">Cancel queue</button>
+                </div>
+                <p id="queueStatus" class="muted">Not in queue.</p>
+              </div>
+              <div class="card lobby-card">
+                <h3>Create match</h3>
+                <p class="muted card-subtitle">Unranked — no Elo loss or gain.</p>
+                <label>
+                  Difficulty
+                  <select id="difficulty">
+                    <option value="">Any</option>
+                    <option>Easy</option>
+                    <option>Medium</option>
+                    <option>Hard</option>
+                  </select>
+                </label>
+                <button id="createMatch" class="btn-primary">Create match</button>
+                <p class="muted">Share the match ID with your opponent.</p>
+              </div>
+              <div class="card lobby-card">
+                <h3>Join match</h3>
+                <input type="text" id="joinMatchId" placeholder="Match ID" />
+                <button id="joinMatch" class="btn-primary">Join match</button>
+              </div>
             </div>
-            <p id="queueStatus" class="muted">Not in queue.</p>
           </div>
-          <div class="card">
-            <h3>Create match</h3>
-            <p class="muted card-subtitle">Unranked — no Elo loss or gain.</p>
-            <label>
-              Difficulty
-              <select id="difficulty">
-                <option value="">Any</option>
-                <option>Easy</option>
-                <option>Medium</option>
-                <option>Hard</option>
-              </select>
-            </label>
-            <button id="createMatch">Create match</button>
-            <p class="muted">Share the match ID with your opponent.</p>
+          <div id="lobbyPagePractice" class="lobby-page" data-page="practice">
+            <h2 class="lobby-page-title">Practice</h2>
+            <p class="lobby-page-desc">Get a random problem and solve it at your own pace. No opponent, no Elo — just code.</p>
+            <div class="card lobby-card practice-card">
+              <div class="practice-content">
+                <span class="practice-icon" aria-hidden="true">◇</span>
+                <h3>Random problem</h3>
+                <p class="muted">We’ll pick a problem for you. Run and test as much as you like.</p>
+                <label>
+                  Difficulty
+                  <select id="practiceDifficulty">
+                    <option value="">Any</option>
+                    <option>Easy</option>
+                    <option>Medium</option>
+                    <option>Hard</option>
+                  </select>
+                </label>
+                <button type="button" id="startPractice" class="btn-primary btn-practice">Start practice</button>
+              </div>
+            </div>
           </div>
-          <div class="card">
-            <h3>Join match</h3>
-            <input type="text" id="joinMatchId" placeholder="Match ID" />
-            <button id="joinMatch">Join match</button>
+          <div id="lobbyPageLeaderboard" class="lobby-page" data-page="leaderboard">
+            <h2 class="lobby-page-title">Leaderboard</h2>
+            <p class="lobby-page-desc">Top players by Elo.</p>
+            <div class="card lobby-card leaderboard-card">
+              <h3>Rankings</h3>
+              <ul id="leaderboard"></ul>
+            </div>
           </div>
-          <div class="card">
-            <h3>Leaderboard</h3>
-            <ul id="leaderboard"></ul>
-          </div>
-          <div class="card">
-            <h3>Your stats</h3>
-            <div id="statsSummary" class="stats"></div>
-          </div>
-          <div class="card">
-            <h3>Recent matches</h3>
-            <ul id="recentMatches"></ul>
-          </div>
-          <div class="card">
-            <h3>Your match history</h3>
-            <ul id="myMatches"></ul>
+          <div id="lobbyPageProfile" class="lobby-page" data-page="profile">
+            <h2 class="lobby-page-title">Profile</h2>
+            <p class="lobby-page-desc">Your stats, recent matches, and history.</p>
+            <div class="lobby-cards grid">
+              <div class="card lobby-card">
+                <h3>Your stats</h3>
+                <div id="statsSummary" class="stats"></div>
+              </div>
+              <div class="card lobby-card">
+                <h3>Recent matches</h3>
+                <ul id="recentMatches"></ul>
+              </div>
+              <div class="card lobby-card">
+                <h3>Your match history</h3>
+                <ul id="myMatches"></ul>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       <section id="match" class="hidden match-section">
         <div class="match-toolbar">
-          <div id="matchMeta" class="match-meta"></div>
-          <div id="matchPlayers" class="match-players"></div>
-          <a id="leetcodeLink" class="leetcode-link" target="_blank" rel="noreferrer">Open on LeetCode</a>
+          <div class="match-toolbar-brand">
+            <span class="match-toolbar-icon" aria-hidden="true">&lt;/&gt;</span>
+            <span class="match-toolbar-title">Match</span>
+          </div>
+          <div class="match-toolbar-info">
+            <div id="matchMeta" class="match-meta"></div>
+            <div id="matchPlayers" class="match-players"></div>
+          </div>
+          <div class="match-toolbar-actions">
+            <a id="leetcodeLink" class="match-toolbar-link" target="_blank" rel="noreferrer">Open on LeetCode</a>
+            <button type="button" id="forfeitBtn" class="match-toolbar-forfeit">Forfeit</button>
+          </div>
         </div>
         <div class="match-panels">
           <div class="panel problem-panel">
@@ -140,7 +211,6 @@
             <div class="runtime-submit-wrap">
               <span id="runtimeDisplay" class="runtime-display muted"></span>
               <span id="matchStatus" class="muted match-status"></span>
-              <button type="button" id="forfeitBtn" class="btn-forfeit">Forfeit</button>
             </div>
           </div>
         </div>

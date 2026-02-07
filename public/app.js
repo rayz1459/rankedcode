@@ -90,8 +90,41 @@ function initCodeEditor() {
 }
 
 function show(section) {
+  document.getElementById("appLoading")?.classList.add("hidden");
   [authSection, lobbySection, matchSection].forEach((el) => el.classList.add("hidden"));
+  if (section === matchSection) {
+    const main = document.querySelector("main");
+    if (main && matchSection && matchSection.parentNode === main) main.insertBefore(matchSection, main.firstChild);
+  }
   section.classList.remove("hidden");
+  document.body.classList.toggle("lobby-visible", section === lobbySection);
+  document.body.classList.toggle("match-visible", section === matchSection);
+  if (section === matchSection) {
+    const mainEl = document.querySelector("main");
+    if (mainEl) void mainEl.offsetHeight;
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }
+  if (section === lobbySection) showLobbyPage("play");
+}
+
+function showLobbyPage(pageId) {
+  document.querySelectorAll(".lobby-page").forEach((p) => p.classList.remove("active"));
+  document.querySelectorAll(".lobby-nav-item").forEach((n) => n.classList.remove("active"));
+  const page = document.querySelector(`.lobby-page[data-page="${pageId}"]`);
+  const navItem = document.querySelector(`.lobby-nav-item[data-lobby-page="${pageId}"]`);
+  if (page) page.classList.add("active");
+  if (navItem) navItem.classList.add("active");
+}
+
+function initLobbyNav() {
+  document.querySelectorAll(".lobby-nav-item").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const pageId = btn.getAttribute("data-lobby-page");
+      if (pageId) showLobbyPage(pageId);
+    });
+  });
 }
 
 function showResultModal({ isWinner, eloDelta, ranked }) {
@@ -112,18 +145,22 @@ function hideResultModal() {
 }
 
 function updateSession() {
-  if (state.user) {
-    session.innerHTML = `Signed in as <strong>${state.user.email}</strong> · Elo ${state.user.elo} <button id="logout">Logout</button>`;
-    document.getElementById("logout").addEventListener("click", () => {
+  const sessionSidebar = document.getElementById("sessionSidebar");
+  const sessionHtml = state.user
+    ? `Signed in as <strong>${state.user.email}</strong> · Elo ${state.user.elo} <button type="button" class="logout-btn">Logout</button>`
+    : "";
+  if (session) session.innerHTML = sessionHtml;
+  if (sessionSidebar) sessionSidebar.innerHTML = sessionHtml;
+  document.querySelectorAll(".logout-btn").forEach((btn) => {
+    btn.onclick = () => {
       state.user = null;
       setToken(null);
       stopQueuePoll();
       show(authSection);
-      session.textContent = "";
-    });
-  } else {
-    session.textContent = "";
-  }
+      if (session) session.textContent = "";
+      if (sessionSidebar) sessionSidebar.textContent = "";
+    };
+  });
 }
 
 async function api(path, options = {}) {
@@ -271,6 +308,20 @@ joinMatchBtn.addEventListener("click", async () => {
   }
 });
 
+document.getElementById("startPractice")?.addEventListener("click", async () => {
+  try {
+    const difficulty = document.getElementById("practiceDifficulty")?.value || "";
+    const payload = await api("/api/matches", {
+      method: "POST",
+      body: JSON.stringify({ difficulty: difficulty || null })
+    });
+    state.currentMatchId = payload.match.id;
+    await openMatch(payload.match.id);
+  } catch (error) {
+    alert(error.message);
+  }
+});
+
 function runPayload(lang, code, stdin) {
   const payload = { language: lang, code, stdin: stdin ?? "" };
   const problem = state.currentProblem;
@@ -283,16 +334,16 @@ runCodeBtn?.addEventListener("click", async () => {
   const code = codeEditor?.getValue?.()?.trim() ?? codeEditorTextarea?.value?.trim();
   if (!code) { if (testResultEl) testResultEl.textContent = "No code to run."; testResultEl?.classList.remove("empty"); return; }
   const lang = languageSelect?.value || "javascript";
-  if (testResultEl) { testResultEl.textContent = "Running..."; testResultEl.classList.remove("empty"); }
+  if (testResultEl) { testResultEl.textContent = "Running..."; testResultEl.classList.remove("empty"); testResultEl.scrollTop = 0; }
   try {
     const result = await api("/api/run", { method: "POST", body: JSON.stringify(runPayload(lang, code, "")) });
     let text = result.stdout || ""; if (result.stderr) text += (text ? "\n" : "") + "stderr:\n" + result.stderr;
     if (!text) text = result.output || "(no output)";
     if (result.runTimeMs != null) text += `\n\n--- Run time: ${result.runTimeMs} ms ---`;
-    if (testResultEl) testResultEl.textContent = text || "(no output)";
+    if (testResultEl) { testResultEl.textContent = text || "(no output)"; testResultEl.scrollTop = 0; }
     if (result.runTimeMs != null) { state.lastRunTimeMs = result.runTimeMs; if (runtimeDisplay) runtimeDisplay.textContent = `Last run: ${result.runTimeMs} ms`; }
   } catch (err) {
-    if (testResultEl) testResultEl.textContent = "Error: " + (err.message || "Run failed");
+    if (testResultEl) { testResultEl.textContent = "Error: " + (err.message || "Run failed"); testResultEl.scrollTop = 0; }
   }
 });
 
@@ -307,6 +358,7 @@ function renderTestResults(payload) {
   testResultEl.classList.remove("empty");
   if (payload.error && payload.results?.length === 0) {
     testResultEl.innerHTML = `<div class="test-summary test-summary--none">${escapeHtml(payload.error)}</div>`;
+    testResultEl.scrollTop = 0;
     return;
   }
   const { results = [], summary = {} } = payload;
@@ -345,6 +397,7 @@ function renderTestResults(payload) {
   });
   html += "</div>";
   testResultEl.innerHTML = html;
+  testResultEl.scrollTop = 0;
   testResultEl.querySelectorAll(".test-case-header").forEach((btn) => {
     btn.addEventListener("click", () => {
       const details = btn.closest(".test-case")?.querySelector(".test-case-details");
@@ -370,7 +423,7 @@ testCodeBtn?.addEventListener("click", async () => {
   if (problem?.titleSlug) payload.problemSlug = problem.titleSlug;
   if (problem?.metaData) payload.metaData = problem.metaData;
   if (problem?.exampleTestcases) payload.exampleTestcases = problem.exampleTestcases;
-  if (testResultEl) { testResultEl.textContent = "Running tests..."; testResultEl.classList.remove("empty"); }
+  if (testResultEl) { testResultEl.textContent = "Running tests..."; testResultEl.classList.remove("empty"); testResultEl.scrollTop = 0; }
   try {
     const result = await api("/api/run-tests", { method: "POST", body: JSON.stringify(payload) });
     renderTestResults(result);
@@ -378,6 +431,7 @@ testCodeBtn?.addEventListener("click", async () => {
     if (testResultEl) {
       testResultEl.textContent = "Error: " + (err.message || "Test failed");
       testResultEl.classList.remove("empty");
+      testResultEl.scrollTop = 0;
     }
   }
 });
@@ -596,6 +650,17 @@ function getSnippetForLang(problem, lang) {
 async function openMatch(matchId) {
   try {
     show(matchSection);
+    const main = document.querySelector("main");
+    matchSection.scrollIntoView({ behavior: "instant", block: "start" });
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    if (main && main.scrollTop !== undefined) main.scrollTop = 0;
+    requestAnimationFrame(() => {
+      matchSection.scrollIntoView({ behavior: "instant", block: "start" });
+      window.scrollTo(0, 0);
+      if (main && main.scrollTop !== undefined) main.scrollTop = 0;
+    });
     const payload = await api(`/api/matches/${matchId}`);
     const match = payload?.match;
     if (!match) { alert("Match not found."); return; }
@@ -676,4 +741,5 @@ async function openMatch(matchId) {
 }
 
 initCodeEditor();
+initLobbyNav();
 bootstrap();
