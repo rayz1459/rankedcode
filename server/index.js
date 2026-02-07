@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import fetch from "node-fetch";
 import { v4 as uuid } from "uuid";
